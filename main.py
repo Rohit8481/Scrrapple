@@ -11,7 +11,7 @@ def news():
     user=os.getenv("TIDB_USER"),
     password=os.getenv("TIDB_PASSWORD"),
     database=os.getenv("TIDB_DATABASE"),
-    port=int(os.getenv("TIDB_PORT", "4000"))
+    
 )
 
   cur = db.cursor(dictionary=True)  # dictionary=True se clean JSON milta h
