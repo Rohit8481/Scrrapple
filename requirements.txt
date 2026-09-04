@@ -6,3 +6,4 @@ transformers
 torch
 google-genai
 python-dotenv
+mysql-connector-python
