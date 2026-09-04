@@ -16,6 +16,7 @@ jobs:
       TIDB_DATABASE: ${{ secrets.TIDB_DATABASE }}
       TIDB_PORT: ${{ secrets.TIDB_PORT }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      MODEL_PATH: ${{ secrets.MODEL_PATH }}
 
     steps:
       - name: Checkout repository
