@@ -1,7 +1,7 @@
 import mysql.connector
 from AllinOne import data, responses, severity
 from datetime import datetime 
-
+import os 
 
 ############ FOR TIME  ################
 time = str(datetime.now().hour)
