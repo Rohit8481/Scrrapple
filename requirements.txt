@@ -7,3 +7,4 @@ torch
 google-genai
 python-dotenv
 mysql-connector-python
+huggingface_hub
