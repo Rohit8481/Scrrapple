@@ -30,8 +30,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Install Playwright Chromium
-        run: playwright install --with-deps chromium
+      - name: Install Playwright Firefox
+        run: playwright install --with-deps firefox
 
       - name: Check files
         run: |
