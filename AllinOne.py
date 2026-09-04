@@ -4,7 +4,7 @@ from transformers import BertForSequenceClassification, BertTokenizer
 from bs4 import BeautifulSoup
 from google import genai
 from playwright.sync_api import sync_playwright
-
+import os
 toi_class = "Kt6Pm style_change T5Q6J"
 ndtv_class = "crd_lnk"
 
@@ -14,7 +14,7 @@ responses =[]
 
 def severe(data) : 
 # 1. Load Model & Tokenizer
-    model_path = r"newz_app\severity_detector"
+    model_path = os.getenv("MODEL_PATH")
     model = BertForSequenceClassification.from_pretrained(model_path)
     tokenizer = BertTokenizer.from_pretrained(model_path)
 
