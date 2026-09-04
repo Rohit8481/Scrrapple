@@ -1,0 +1,36 @@
+name: News Scraper
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    env:
+      TIDB_HOST: ${{ secrets.TIDB_HOST }}
+      TIDB_USER: ${{ secrets.TIDB_USER }}
+      TIDB_PASSWORD: ${{ secrets.TIDB_PASSWORD }}
+      TIDB_DATABASE: ${{ secrets.TIDB_DATABASE }}
+      TIDB_PORT: ${{ secrets.TIDB_PORT }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: playwright install --with-deps chromium
+
+      - name: Run news scraper
+        run: python database.py
