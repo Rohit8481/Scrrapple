@@ -126,7 +126,7 @@ def short(text):
             inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
             max_length=10,
-            min_length=3,
+            min_length=2,
             num_beams=4,
             early_stopping=True,
             no_repeat_ngram_size=2
@@ -135,9 +135,13 @@ def short(text):
     raw_output = keybart_tokenizer.decode(
         summary_ids[0],
         skip_special_tokens=True
-    )
+    ).strip()
 
-    return raw_output.strip()
+    # Take only the first phrase
+    first_phrase = raw_output.split(";")[0].strip()
+
+    # Add semicolon at the end
+    return first_phrase 
 
 
 # ============================================================
