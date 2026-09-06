@@ -12,9 +12,15 @@ from transformers import (
     BertTokenizer,
 )
 
-# --- 1. Global Setup & Model Loading (Loaded ONCE to save RAM & Time) ---
+# --- 1. Global Module Data (Tuples accessible anywhere) ---
 
-# Load BERT Severity Classifier
+data: tuple = ()
+severity: tuple = ()
+responses: tuple = ()
+
+
+# --- 2. Global Setup & Model Loading ---
+
 severity_model_path = "haggue23/severity_detector_directory"
 severity_model = BertForSequenceClassification.from_pretrained(severity_model_path)
 severity_tokenizer = BertTokenizer.from_pretrained(severity_model_path)
@@ -23,12 +29,10 @@ device = torch.device("cpu")
 severity_model.to(device)
 severity_model.eval()
 
-# Load KeyBART Model
 keybart_model_name = "bloomberg/KeyBART"
 keybart_tokenizer = AutoTokenizer.from_pretrained(keybart_model_name)
 keybart_model = AutoModelForSeq2SeqLM.from_pretrained(keybart_model_name)
 
-# Selectors & Constants
 toi_class = "Kt6Pm style_change T5Q6J"
 COPYRIGHT_BOILERPLATE_WORDS = [
     "live updates", "live update", "breaking news", "live news", "live blog", "live coverage",
@@ -51,7 +55,7 @@ COPYRIGHT_BOILERPLATE_WORDS = [
 ]
 
 
-# --- 2. Processing Functions ---
+# --- 3. Processing Functions ---
 
 def severe(text_input):
     tok = severity_tokenizer(
@@ -162,42 +166,41 @@ async def scrape(url):
         return headline
 
 
-# --- 3. Main Execution Workflow ---
+# --- 4. Pipeline Execution Function ---
 
-async def main():
+async def run_pipeline():
+    global data, severity, responses
+
     Urls = [
         "https://www.ndtv.com",
         "https://www.thehindu.com/",
         "https://timesofindia.indiatimes.com/",
     ]
 
-    data = []
-    severity = []
-    responses = []
+    data_list = []
+    severity_list = []
+    responses_list = []
 
-    print("Scraping started...")
     for url in Urls:
         result = await scrape(url)
         headline_clean = result.replace("'", "''")
-        data.append(headline_clean)
-    print("Scraping completed!")
+        data_list.append(headline_clean)
 
-    print("Evaluating Severity...")
-    for text in data:
-        severity.append(severe(text))
-    print("Severity evaluation completed!")
+    for text in data_list:
+        severity_list.append(severe(text))
 
-    print("Generating Keyphrases...")
-    for text in data:
+    for text in data_list:
         cleaned_text = clean_sentence(text, COPYRIGHT_BOILERPLATE_WORDS)
-        responses.append(short(cleaned_text))
-    print("Keyphrases completed!")
+        responses_list.append(short(cleaned_text))
 
-    print("\n--- RESULTS ---")
-    print("Scraped Data:", data)
-    print("Severity Rating:", severity)
-    print("Short Keyphrase:", responses)
+    # Convert to tuples and assign to global variables
+    data = tuple(data_list)
+    severity = tuple(severity_list)
+    responses = tuple(responses_list)
 
-# Run pipeline inside Jupyter / Colab
+    return data, severity, responses
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_pipeline())
+    
