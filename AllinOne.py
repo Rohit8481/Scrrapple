@@ -12,11 +12,11 @@ from transformers import (
     BertTokenizer,
 )
 
-# --- 1. Global Module Data (Tuples accessible anywhere) ---
+# --- 1. Global Module Data (Lists accessible from external scripts) ---
 
-data: tuple = ()
-severity: tuple = ()
-responses: tuple = ()
+data: list = []
+severity: list = []
+responses: list = []
 
 
 # --- 2. Global Setup & Model Loading ---
@@ -57,7 +57,8 @@ COPYRIGHT_BOILERPLATE_WORDS = [
 
 # --- 3. Processing Functions ---
 
-def severe(text_input):
+def severe(text_input: str) -> str:
+    """Classifies severity level of text using BERT."""
     tok = severity_tokenizer(
         text_input,
         padding=True,
@@ -82,6 +83,7 @@ def severe(text_input):
 
 
 def clean_sentence(text: str, remove_words: list) -> str:
+    """Removes media boilerplate terms and extra formatting."""
     sorted_words = sorted(remove_words, key=len, reverse=True)
     patterns = [re.escape(word) for word in sorted_words]
     
@@ -96,7 +98,8 @@ def clean_sentence(text: str, remove_words: list) -> str:
     return cleaned_text.strip()
 
 
-def short(cleaned_text):
+def short(cleaned_text: str) -> str:
+    """Extracts key phrase using KeyBART."""
     inputs = keybart_tokenizer(cleaned_text, return_tensors="pt", max_length=512, truncation=True)
 
     summary_ids = keybart_model.generate(
@@ -113,7 +116,68 @@ def short(cleaned_text):
     return single_keyphrase
 
 
-async def scrape(url):
+async def scrape(page, url: str) -> str:
+    """Scrapes headline given an active Playwright page instance."""
+    await page.goto(url, wait_until="domcontentloaded")
+    headline = None
+
+    if "ndtv.com" in url:
+        try:
+            await page.wait_for_selector("h1, h3", timeout=15000)
+        except Exception:
+            pass
+
+        content = await page.content()
+        soup = BeautifulSoup(content, "html.parser")
+        headlines = [
+            tag.get_text(separator=" ", strip=True) 
+            for tag in soup.find_all(["h1", "h3"]) 
+            if len(tag.get_text(strip=True)) > 15
+        ]
+        headline = headlines[0] if headlines else "NDTV headline not found"
+
+    elif "thehindu.com" in url:
+        try:
+            await page.wait_for_selector("h1", timeout=15000)
+        except Exception:
+            pass
+
+        content = await page.content()
+        soup = BeautifulSoup(content, "html.parser")
+        head = soup.find("h1", class_="title") or soup.find("h1")
+        headline = head.get_text(separator=" ", strip=True) if head else "The Hindu headline not found"
+
+    else:
+        try:
+            await page.wait_for_selector(f"div.{toi_class.replace(' ', '.')}", timeout=15000)
+        except Exception:
+            pass
+
+        content = await page.content()
+        soup = BeautifulSoup(content, "html.parser")
+        headline_div = soup.find("div", class_="Kt6Pm style_change T5Q6J")
+        headline = headline_div.get_text(separator=" ", strip=True) if headline_div else "TOI headline not found"
+
+    return headline
+
+
+# --- 4. Pipeline Execution Function ---
+
+async def run_pipeline() -> tuple[list, list, list]:
+    """Runs pipeline and populates global lists in-place."""
+    global data, severity, responses
+
+    urls = [
+        "https://www.ndtv.com",
+        "https://www.thehindu.com/",
+        "https://timesofindia.indiatimes.com/",
+    ]
+
+    temp_data = []
+    temp_severity = []
+    temp_responses = []
+
+    # Playwright Scraping
     async with async_playwright() as p:
         browser = await p.firefox.launch(headless=True)
         context = await browser.new_context(
@@ -121,81 +185,36 @@ async def scrape(url):
             viewport={"width": 1920, "height": 1080},
         )
         page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded")
 
-        headline = None
-
-        if "ndtv.com" in url:
-            try:
-                await page.wait_for_selector("h1, h3", timeout=15000)
-            except Exception:
-                pass
-
-            content = await page.content()
-            soup = BeautifulSoup(content, "html.parser")
-            headlines = [
-                tag.get_text(separator=" ", strip=True) 
-                for tag in soup.find_all(["h1", "h3"]) 
-                if len(tag.get_text(strip=True)) > 15
-            ]
-            headline = headlines[0] if headlines else "NDTV headline not found"
-
-        elif "thehindu.com" in url:
-            try:
-                await page.wait_for_selector("h1", timeout=15000)
-            except Exception:
-                pass
-
-            content = await page.content()
-            soup = BeautifulSoup(content, "html.parser")
-            head = soup.find("h1", class_="title") or soup.find("h1")
-            headline = head.get_text(separator=" ", strip=True) if head else "The Hindu headline not found"
-
-        else:
-            try:
-                await page.wait_for_selector(f"div.{toi_class.replace(' ', '.')}", timeout=15000)
-            except Exception:
-                pass
-
-            content = await page.content()
-            soup = BeautifulSoup(content, "html.parser")
-            headline_div = soup.find("div", class_="Kt6Pm style_change T5Q6J")
-            headline = headline_div.get_text(separator=" ", strip=True) if headline_div else "TOI headline not found"
+        for url in urls:
+            result = await scrape(page, url)
+            headline_clean = result.replace("'", "''")
+            temp_data.append(headline_clean)
 
         await browser.close()
-        return headline
 
-
-# --- 4. Pipeline Execution Function ---
-
-async def run_pipeline():
-    global data, severity, responses
-
-    Urls = [
-        "https://www.ndtv.com",
-        "https://www.thehindu.com/",
-        "https://timesofindia.indiatimes.com/",
-    ]
-
-    data = []
-    severity = []
-    responses = []
-
-    for url in Urls:
-        result = await scrape(url)
-        headline_clean = result.replace("'", "''")
-        data.append(headline_clean)
-
-    for text in data:
-        severity.append(severe(text))
-
-    for text in data:
+    # Classification & Keyphrase extraction
+    for text in temp_data:
+        temp_severity.append(severe(text))
         cleaned_text = clean_sentence(text, COPYRIGHT_BOILERPLATE_WORDS)
-        responses.append(short(cleaned_text))
+        temp_responses.append(short(cleaned_text))
+
+    # Clear and update global lists in-place to preserve imports in other modules
+    data.clear()
+    data.extend(temp_data)
+
+    severity.clear()
+    severity.extend(temp_severity)
+
+    responses.clear()
+    responses.extend(temp_responses)
 
     return data, severity, responses
 
 
 if __name__ == "__main__":
     asyncio.run(run_pipeline())
-    
+    print("\n--- Pipeline Execution Output ---")
+    print("data =", data)
+    print("severity =", severity)
+    print("responses =", responses)
