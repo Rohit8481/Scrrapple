@@ -1,35 +1,60 @@
 import torch
 import torch.nn.functional as F
-from transformers import BertForSequenceClassification, BertTokenizer
+from transformers import (
+    BertForSequenceClassification,
+    BertTokenizer,
+    BartForConditionalGeneration,
+    BartTokenizer
+)
 from bs4 import BeautifulSoup
-from google import genai
 from playwright.sync_api import sync_playwright
-from pathlib import Path
+
+
+# ============================================================
+# WEBSITE SETTINGS
+# ============================================================
 
 toi_class = "Kt6Pm style_change T5Q6J"
 ndtv_class = "crd_lnk"
 
-severity =[]
-data =[]
-responses =[]
+
+# ============================================================
+# GLOBAL LISTS
+# database.py will import these
+# ============================================================
+
+severity = []
+data = []
+responses = []
+
+
+# ============================================================
+# SEVERITY MODEL
+# ============================================================
+
+model_path = "haggue23/severity_detector_directory"
+
+print("Loading severity model...")
+
+severity_model = BertForSequenceClassification.from_pretrained(
+    model_path
+)
+
+severity_tokenizer = BertTokenizer.from_pretrained(
+    model_path
+)
+
+severity_device = torch.device("cpu")
+
+severity_model.to(severity_device)
+severity_model.eval()
+
+print("Severity model loaded")
+
 
 def severe(data):
 
-    # 1. Locate model folder
-    
-    model_path = "haggue23/severity_detector_directory"
-
-    # 2. Load model & tokenizer
-    model = BertForSequenceClassification.from_pretrained(model_path)
-    tokenizer = BertTokenizer.from_pretrained(model_path)
-
-    # 3. Use CPU
-    device = torch.device("cpu")
-    model.to(device)
-    model.eval()
-
-    # 4. Tokenize input
-    tok = tokenizer(
+    tok = severity_tokenizer(
         data,
         padding=True,
         truncation=True,
@@ -37,20 +62,24 @@ def severe(data):
         return_tensors="pt",
     )
 
-    tok["input_ids"] = tok["input_ids"].to(device)
-    tok["attention_mask"] = tok["attention_mask"].to(device)
+    tok["input_ids"] = tok["input_ids"].to(severity_device)
+    tok["attention_mask"] = tok["attention_mask"].to(severity_device)
 
-    # 5. Inference
     with torch.no_grad():
-        output = model(**tok)
+
+        output = severity_model(**tok)
+
         logits = output.logits
 
-        probabilities = F.softmax(logits, dim=1)[0] * 100
+        probabilities = F.softmax(
+            logits,
+            dim=1
+        )[0] * 100
 
-    # 6. Get predicted class
-    predicted_class = torch.argmax(probabilities).item() + 1
+    predicted_class = torch.argmax(
+        probabilities
+    ).item() + 1
 
-    # 7. Map class to severity
     severity_map = {
         1: "MEDIUM",
         2: "HIGH",
@@ -59,69 +88,208 @@ def severe(data):
 
     return severity_map[predicted_class]
 
-def scrape(url):
-    with sync_playwright() as p:
-        browser = p.firefox.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-            viewport={"width": 1920, "height": 1080},
+
+# ============================================================
+# KEYBART MODEL
+# ============================================================
+
+keybart_model_name = "bloomberg/KeyBART"
+
+print("Loading KeyBART model...")
+
+keybart_tokenizer = BartTokenizer.from_pretrained(
+    keybart_model_name
+)
+
+keybart_model = BartForConditionalGeneration.from_pretrained(
+    keybart_model_name
+)
+
+keybart_model.to(torch.device("cpu"))
+keybart_model.eval()
+
+print("KeyBART model loaded")
+
+
+def short(text):
+
+    inputs = keybart_tokenizer(
+        text,
+        return_tensors="pt",
+        max_length=512,
+        truncation=True
+    )
+
+    with torch.no_grad():
+
+        summary_ids = keybart_model.generate(
+            inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            max_length=10,
+            min_length=3,
+            num_beams=4,
+            early_stopping=True,
+            no_repeat_ngram_size=2
         )
+
+    raw_output = keybart_tokenizer.decode(
+        summary_ids[0],
+        skip_special_tokens=True
+    )
+
+    return raw_output.strip()
+
+
+# ============================================================
+# SCRAPING FUNCTION
+# ============================================================
+
+def scrape(url):
+
+    with sync_playwright() as p:
+
+        browser = p.firefox.launch(
+            headless=True
+        )
+
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) "
+                "Gecko/20100101 Firefox/125.0"
+            ),
+            viewport={
+                "width": 1920,
+                "height": 1080
+            },
+        )
+
         page = context.new_page()
-        page.goto(url, wait_until="domcontentloaded")
+
+        page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=60000
+        )
 
         headline = None
 
-        if url == "https://www.ndtv.com":
-            page.wait_for_selector("h1, h3", timeout=15000)
+        # ====================================================
+        # NDTV
+        # ====================================================
 
-            # Re-fetch HTML after waiting
-            soup = BeautifulSoup(page.content(), "html.parser")
+        if url == "https://www.ndtv.com":
+
+            page.wait_for_selector(
+                "h1, h3",
+                timeout=15000
+            )
+
+            soup = BeautifulSoup(
+                page.content(),
+                "html.parser"
+            )
+
             headlines = []
 
-            for tag in soup.find_all(["h1", "h3"]):
-                text = tag.get_text(separator=" ", strip=True)
+            for tag in soup.find_all(
+                ["h1", "h3"]
+            ):
+
+                text = tag.get_text(
+                    separator=" ",
+                    strip=True
+                )
+
                 if text and len(text) > 15:
                     headlines.append(text)
 
-            # Combine or take the top headline
-            headline = headlines[0] if headlines else "NDTV headlines not found"
+            headline = (
+                headlines[0]
+                if headlines
+                else "NDTV headlines not found"
+            )
+
+        # ====================================================
+        # THE HINDU
+        # ====================================================
 
         elif url == "https://www.thehindu.com/":
-            page.wait_for_selector("h1", timeout=15000)
 
-            # Re-fetch HTML after waiting
-            soup = BeautifulSoup(page.content(), "html.parser")
-            head = soup.find("h1", class_="title")
+            page.wait_for_selector(
+                "h1",
+                timeout=15000
+            )
+
+            soup = BeautifulSoup(
+                page.content(),
+                "html.parser"
+            )
+
+            head = soup.find(
+                "h1",
+                class_="title"
+            )
 
             if head:
-                headline = head.get_text(separator=" ", strip=True)
+
+                headline = head.get_text(
+                    separator=" ",
+                    strip=True
+                )
+
             else:
-                # Fallback to any h1 if class='title' isn't used
+
                 head_any = soup.find("h1")
+
                 headline = (
-                    head_any.get_text(separator=" ", strip=True)
+                    head_any.get_text(
+                        separator=" ",
+                        strip=True
+                    )
                     if head_any
                     else "The Hindu headline not found"
                 )
 
+        # ====================================================
+        # TIMES OF INDIA
+        # ====================================================
+
         else:
+
             page.wait_for_selector(
-                f"div.{toi_class.replace(' ', '.')}", timeout=15000
+                f"div.{toi_class.replace(' ', '.')}",
+                timeout=15000
             )
 
-            # Re-fetch HTML after waiting
-            soup = BeautifulSoup(page.content(), "html.parser")
-            headline_div = soup.find("div", class_="Kt6Pm style_change T5Q6J")
+            soup = BeautifulSoup(
+                page.content(),
+                "html.parser"
+            )
+
+            headline_div = soup.find(
+                "div",
+                class_="Kt6Pm style_change T5Q6J"
+            )
 
             if headline_div:
-                headline = headline_div.get_text(separator=" ", strip=True)
+
+                headline = headline_div.get_text(
+                    separator=" ",
+                    strip=True
+                )
+
             else:
+
                 headline = "TOI headline not found"
 
         browser.close()
-        return headline
-        
 
+        return headline
+
+
+# ============================================================
+# URLS
+# ============================================================
 
 Urls = [
     "https://www.ndtv.com",
@@ -129,46 +297,107 @@ Urls = [
     "https://timesofindia.indiatimes.com/",
 ]
 
+
+# ============================================================
+# SCRAPING
+# ============================================================
+
 for i in Urls:
-    result = scrape(i)
-    headline_clean = result.replace("'", "''")
-    data.append(headline_clean)
-print("scraping done")    
+
+    try:
+
+        result = scrape(i)
+
+        if result:
+
+            headline_clean = result.replace(
+                "'",
+                "''"
+            )
+
+            data.append(headline_clean)
+
+            print(
+                f"Scraped: {headline_clean}"
+            )
+
+    except Exception as e:
+
+        print(
+            f"Error scraping {i}: {e}"
+        )
+
+
+print("scraping done")
+
+
+# ============================================================
+# SEVERITY
+# ============================================================
 
 for i in data:
-    severity.append(severe(i))
+
+    try:
+
+        result = severe(i)
+
+        severity.append(result)
+
+        print(
+            f"Severity: {result}"
+        )
+
+    except Exception as e:
+
+        print(
+            f"Severity error: {e}"
+        )
+
+        severity.append("UNKNOWN")
+
+
 print("severity done")
 
-# Pass the API key using the keyword argument `api_key=`
-import os
-from dotenv import load_dotenv
-from google import genai
 
-load_dotenv()
-
-api_key = os.getenv("GEMINI_API_KEY")
-
-if not api_key:
-    raise ValueError(
-        "GEMINI_API_KEY was not found. Check your .env file."
-    )
-
-client = genai.Client(api_key=api_key)
-
-responses = []
+# ============================================================
+# KEYBART SHORT HEADLINES
+# ============================================================
 
 for i in data:
-    response = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=f"""
-Rewrite the following headline into EXACTLY 3 words.
-Respond with ONLY those 3 words—no quotes, no punctuation,
-and no additional text.
 
-Original Headline: {i}
-"""
-    )
+    try:
 
-    responses.append(response.text.strip())
+        result = short(i)
+
+        responses.append(result)
+
+        print(
+            f"Short: {result}"
+        )
+
+    except Exception as e:
+
+        print(
+            f"KeyBART error: {e}"
+        )
+
+        responses.append("")
+
 
 print("response done")
+
+
+# ============================================================
+# FINAL CHECK
+# ============================================================
+
+print()
+print("================================")
+print("FINAL RESULTS")
+print("================================")
+
+print("Headlines:", len(data))
+print("Severity:", len(severity))
+print("Short headlines:", len(responses))
+
+print("================================")
