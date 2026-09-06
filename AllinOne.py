@@ -177,26 +177,21 @@ async def run_pipeline():
         "https://timesofindia.indiatimes.com/",
     ]
 
-    data_list = []
-    severity_list = []
-    responses_list = []
+    data = []
+    severity = []
+    responses = []
 
     for url in Urls:
         result = await scrape(url)
         headline_clean = result.replace("'", "''")
-        data_list.append(headline_clean)
+        data.append(headline_clean)
 
-    for text in data_list:
-        severity_list.append(severe(text))
+    for text in data:
+        severity.append(severe(text))
 
-    for text in data_list:
+    for text in data:
         cleaned_text = clean_sentence(text, COPYRIGHT_BOILERPLATE_WORDS)
-        responses_list.append(short(cleaned_text))
-
-    # Convert to tuples and assign to global variables
-    data = tuple(data_list)
-    severity = tuple(severity_list)
-    responses = tuple(responses_list)
+        responses.append(short(cleaned_text))
 
     return data, severity, responses
 
