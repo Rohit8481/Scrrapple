@@ -1,164 +1,202 @@
+import asyncio
+import re
+from pathlib import Path
 import torch
 import torch.nn.functional as F
-from transformers import BertForSequenceClassification, BertTokenizer
 from bs4 import BeautifulSoup
-from google import genai
-from playwright.sync_api import sync_playwright
-import os
+from playwright.async_api import async_playwright
+from transformers import (
+    AutoModelForSeq2SeqLM,
+    AutoTokenizer,
+    BertForSequenceClassification,
+    BertTokenizer,
+)
+
+# --- 1. Global Setup & Model Loading (Loaded ONCE to save RAM & Time) ---
+
+# Load BERT Severity Classifier
+severity_model_path = "haggue23/severity_detector_directory"
+severity_model = BertForSequenceClassification.from_pretrained(severity_model_path)
+severity_tokenizer = BertTokenizer.from_pretrained(severity_model_path)
+
+device = torch.device("cpu")
+severity_model.to(device)
+severity_model.eval()
+
+# Load KeyBART Model
+keybart_model_name = "bloomberg/KeyBART"
+keybart_tokenizer = AutoTokenizer.from_pretrained(keybart_model_name)
+keybart_model = AutoModelForSeq2SeqLM.from_pretrained(keybart_model_name)
+
+# Selectors & Constants
 toi_class = "Kt6Pm style_change T5Q6J"
-ndtv_class = "crd_lnk"
+COPYRIGHT_BOILERPLATE_WORDS = [
+    "live updates", "live update", "breaking news", "live news", "live blog", "live coverage",
+    "just in", "developing story", "watch live", "watch video", "exclusive", "special report",
+    "top stories", "latest news", "flash news", "news alert", "trending now",
+    "all rights reserved", "rights reserved", "copyright", "copyrighted", "courtesy", 
+    "courtesy of", "source", "photo credit", "image source", "disclaimer", "terms of use", 
+    "privacy policy", "reproduction prohibited", "published by", "reported by", "file photo",
+    "ndtv", "ndtv live", "reuters", "associated press", "ap news", "afp", "bloomberg", 
+    "bbc", "bbc news", "cnn", "fox news", "al jazeera", "times of india", "toi", 
+    "hindustan times", "the hindu", "indian express", "aaj tak", "zee news", "indiatv", 
+    "ani news", "pti", "press trust of india", "financial times", "wall street journal", 
+    "wsj", "the guardian", "new york times", "nyt", "washington post", "forbes",
+    "com", "org", "net", "in", "co", "co.in", "gov", "edu", "info", "io", "news", 
+    "www", "http", "https", "dot com",
+    "click here", "read more", "subscribe", "follow us", "share", "tweet", "retweet", 
+    "facebook", "twitter", "x.com", "instagram", "youtube", "telegram", "whatsapp", 
+    "podcast", "newsletter", "advertisement", "sponsored", "editorial", "opinion",
+    "view original", "full story", "full report"
+]
 
-severity =[]
-data =[]
-responses =[]
 
-def severe(data) : 
-# 1. Load Model & Tokenizer
-    model_path = os.getenv("MODEL_PATH")
-    model = BertForSequenceClassification.from_pretrained(model_path)
-    tokenizer = BertTokenizer.from_pretrained(model_path)
+# --- 2. Processing Functions ---
 
-    device = torch.device("cpu")
-    model.to(device)
-    model.eval()
-
-    tok = tokenizer(
-        data,
+def severe(text_input):
+    tok = severity_tokenizer(
+        text_input,
         padding=True,
         truncation=True,
         max_length=128,
         return_tensors="pt",
+    ).to(device)
+
+    with torch.no_grad():
+        output = severity_model(**tok)
+        logits = output.logits
+        probabilities = F.softmax(logits, dim=1)[0] * 100
+
+    predicted_class = torch.argmax(probabilities).item() + 1
+
+    severity_map = {
+        1: "MEDIUM",
+        2: "HIGH",
+        3: "LOW"
+    }
+    return severity_map.get(predicted_class, "UNKNOWN")
+
+
+def clean_sentence(text: str, remove_words: list) -> str:
+    sorted_words = sorted(remove_words, key=len, reverse=True)
+    patterns = [re.escape(word) for word in sorted_words]
+    
+    regex_pattern = re.compile(r'\b(' + '|'.join(patterns) + r')\b', flags=re.IGNORECASE)
+    cleaned_text = regex_pattern.sub("", text)
+    
+    cleaned_text = re.sub(r'\s+', ' ', cleaned_text)
+    cleaned_text = re.sub(r'^\s*[\:\-\|\,\.\?]+\s*', '', cleaned_text)
+    cleaned_text = re.sub(r'\s*[\:\-\|\,\.\?]+\s*$', '', cleaned_text)
+    cleaned_text = re.sub(r'\s+([\:\-\|\,])', r'\1', cleaned_text)
+    
+    return cleaned_text.strip()
+
+
+def short(cleaned_text):
+    inputs = keybart_tokenizer(cleaned_text, return_tensors="pt", max_length=512, truncation=True)
+
+    summary_ids = keybart_model.generate(
+        inputs["input_ids"], 
+        max_length=15,
+        min_length=2,
+        num_beams=4, 
+        length_penalty=0.6,
+        early_stopping=True
     )
 
-    tok["input_ids"] = tok["input_ids"].to(device)
-    tok["attention_mask"] = tok["attention_mask"].to(device)
-
-    # 4. Inference & Softmax
-    with torch.no_grad():
-        output = model(**tok)
-        logits = output.logits  # Shape: [1, 3]
-
-        # Convert raw logits to percentage probabilities (0% - 100%)
-        probabilities = F.softmax(logits, dim=1)[0] * 100
-    
-    predicted_class = torch.argmax(probabilities).item() + 1 # 1-indexed (1, 2, or 3)
-
-    severity_map = {1: "MEDIUM", 2: "HIGH", 3: "LOW"}
-
-    return severity_map[predicted_class]
+    raw_output = keybart_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+    single_keyphrase = re.split(r'[;,]', raw_output)[0].strip()
+    return single_keyphrase
 
 
-def scrape(url):
-    with sync_playwright() as p:
-        browser = p.firefox.launch(headless=True)
-        context = browser.new_context(
+async def scrape(url):
+    async with async_playwright() as p:
+        browser = await p.firefox.launch(headless=True)
+        context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
             viewport={"width": 1920, "height": 1080},
         )
-        page = context.new_page()
-        page.goto(url, wait_until="domcontentloaded")
+        page = await context.new_page()
+        await page.goto(url, wait_until="domcontentloaded")
 
         headline = None
 
-        if url == "https://www.ndtv.com":
-            page.wait_for_selector("h1, h3", timeout=15000)
+        if "ndtv.com" in url:
+            try:
+                await page.wait_for_selector("h1, h3", timeout=15000)
+            except Exception:
+                pass
 
-            # Re-fetch HTML after waiting
-            soup = BeautifulSoup(page.content(), "html.parser")
-            headlines = []
+            content = await page.content()
+            soup = BeautifulSoup(content, "html.parser")
+            headlines = [
+                tag.get_text(separator=" ", strip=True) 
+                for tag in soup.find_all(["h1", "h3"]) 
+                if len(tag.get_text(strip=True)) > 15
+            ]
+            headline = headlines[0] if headlines else "NDTV headline not found"
 
-            for tag in soup.find_all(["h1", "h3"]):
-                text = tag.get_text(separator=" ", strip=True)
-                if text and len(text) > 15:
-                    headlines.append(text)
+        elif "thehindu.com" in url:
+            try:
+                await page.wait_for_selector("h1", timeout=15000)
+            except Exception:
+                pass
 
-            # Combine or take the top headline
-            headline = headlines[0] if headlines else "NDTV headlines not found"
-
-        elif url == "https://www.thehindu.com/":
-            page.wait_for_selector("h1", timeout=15000)
-
-            # Re-fetch HTML after waiting
-            soup = BeautifulSoup(page.content(), "html.parser")
-            head = soup.find("h1", class_="title")
-
-            if head:
-                headline = head.get_text(separator=" ", strip=True)
-            else:
-                # Fallback to any h1 if class='title' isn't used
-                head_any = soup.find("h1")
-                headline = (
-                    head_any.get_text(separator=" ", strip=True)
-                    if head_any
-                    else "The Hindu headline not found"
-                )
+            content = await page.content()
+            soup = BeautifulSoup(content, "html.parser")
+            head = soup.find("h1", class_="title") or soup.find("h1")
+            headline = head.get_text(separator=" ", strip=True) if head else "The Hindu headline not found"
 
         else:
-            page.wait_for_selector(
-                f"div.{toi_class.replace(' ', '.')}", timeout=15000
-            )
+            try:
+                await page.wait_for_selector(f"div.{toi_class.replace(' ', '.')}", timeout=15000)
+            except Exception:
+                pass
 
-            # Re-fetch HTML after waiting
-            soup = BeautifulSoup(page.content(), "html.parser")
+            content = await page.content()
+            soup = BeautifulSoup(content, "html.parser")
             headline_div = soup.find("div", class_="Kt6Pm style_change T5Q6J")
+            headline = headline_div.get_text(separator=" ", strip=True) if headline_div else "TOI headline not found"
 
-            if headline_div:
-                headline = headline_div.get_text(separator=" ", strip=True)
-            else:
-                headline = "TOI headline not found"
-
-        browser.close()
+        await browser.close()
         return headline
-        
 
 
-Urls = [
-    "https://www.ndtv.com",
-    "https://www.thehindu.com/",
-    "https://timesofindia.indiatimes.com/",
-]
+# --- 3. Main Execution Workflow ---
 
-for i in Urls:
-    result = scrape(i)
-    headline_clean = result.replace("'", "''")
-    data.append(headline_clean)
-print("scraping done")    
+async def main():
+    Urls = [
+        "https://www.ndtv.com",
+        "https://www.thehindu.com/",
+        "https://timesofindia.indiatimes.com/",
+    ]
 
-for i in data:
-    severity.append(severe(i))
-print("severity done")
+    data = []
+    severity = []
+    responses = []
 
-# Pass the API key using the keyword argument `api_key=`
-import os
-from dotenv import load_dotenv
-from google import genai
+    print("Scraping started...")
+    for url in Urls:
+        result = await scrape(url)
+        headline_clean = result.replace("'", "''")
+        data.append(headline_clean)
+    print("Scraping completed!")
 
-load_dotenv()
+    print("Evaluating Severity...")
+    for text in data:
+        severity.append(severe(text))
+    print("Severity evaluation completed!")
 
-api_key = os.getenv("GEMINI_API_KEY")
+    print("Generating Keyphrases...")
+    for text in data:
+        cleaned_text = clean_sentence(text, COPYRIGHT_BOILERPLATE_WORDS)
+        responses.append(short(cleaned_text))
+    print("Keyphrases completed!")
 
-if not api_key:
-    raise ValueError(
-        "GEMINI_API_KEY was not found. Check your .env file."
-    )
+    print("\n--- RESULTS ---")
+    print("Scraped Data:", data)
+    print("Severity Rating:", severity)
+    print("Short Keyphrase:", responses)
 
-client = genai.Client(api_key=api_key)
-
-responses = []
-
-for i in data:
-    response = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=f"""
-Rewrite the following headline into EXACTLY 3 words.
-Respond with ONLY those 3 words—no quotes, no punctuation,
-and no additional text.
-
-Original Headline: {i}
-"""
-    )
-
-    responses.append(response.text.strip())
-
-print("response done")
-print(responses)
+# Run pipeline inside Jupyter / Colab
+await main()
