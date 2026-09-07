@@ -1,407 +1,211 @@
+import asyncio
+import re
+from pathlib import Path
 import torch
 import torch.nn.functional as F
+from bs4 import BeautifulSoup
+from playwright.async_api import async_playwright
 from transformers import (
+    AutoModelForSeq2SeqLM,
+    AutoTokenizer,
     BertForSequenceClassification,
     BertTokenizer,
-    BartForConditionalGeneration,
-    BartTokenizer
 )
-from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
 
+# --- 1. Global Module Data (Lists accessible from external scripts) ---
 
-# ============================================================
-# WEBSITE SETTINGS
-# ============================================================
-
-toi_class = "Kt6Pm style_change T5Q6J"
-ndtv_class = "crd_lnk"
-
-
-# ============================================================
-# GLOBAL LISTS
-# database.py will import these
-# ============================================================
-
-severity = []
 data = []
-responses = []
+severity = []
+responses=[]
 
 
-# ============================================================
-# SEVERITY MODEL
-# ============================================================
+# --- 2. Global Setup & Model Loading ---
 
-model_path = "haggue23/severity_detector_directory"
+severity_model_path = "haggue23/severity_detector_directory"
+severity_model = BertForSequenceClassification.from_pretrained(severity_model_path)
+severity_tokenizer = BertTokenizer.from_pretrained(severity_model_path)
 
-print("Loading severity model...")
-
-severity_model = BertForSequenceClassification.from_pretrained(
-    model_path
-)
-
-severity_tokenizer = BertTokenizer.from_pretrained(
-    model_path
-)
-
-severity_device = torch.device("cpu")
-
-severity_model.to(severity_device)
+device = torch.device("cpu")
+severity_model.to(device)
 severity_model.eval()
 
-print("Severity model loaded")
+keybart_model_name = "bloomberg/KeyBART"
+keybart_tokenizer = AutoTokenizer.from_pretrained(keybart_model_name)
+keybart_model = AutoModelForSeq2SeqLM.from_pretrained(keybart_model_name)
+
+toi_class = "Kt6Pm style_change T5Q6J"
+COPYRIGHT_BOILERPLATE_WORDS = [
+    "live updates", "live update", "breaking news", "live news", "live blog", "live coverage",
+    "just in", "developing story", "watch live", "watch video", "exclusive", "special report",
+    "top stories", "latest news", "flash news", "news alert", "trending now",
+    "all rights reserved", "rights reserved", "copyright", "copyrighted", "courtesy", 
+    "courtesy of", "source", "photo credit", "image source", "disclaimer", "terms of use", 
+    "privacy policy", "reproduction prohibited", "published by", "reported by", "file photo",
+    "ndtv", "ndtv live", "reuters", "associated press", "ap news", "afp", "bloomberg", 
+    "bbc", "bbc news", "cnn", "fox news", "al jazeera", "times of india", "toi", 
+    "hindustan times", "the hindu", "indian express", "aaj tak", "zee news", "indiatv", 
+    "ani news", "pti", "press trust of india", "financial times", "wall street journal", 
+    "wsj", "the guardian", "new york times", "nyt", "washington post", "forbes",
+    "com", "org", "net", "in", "co", "co.in", "gov", "edu", "info", "io", "news", 
+    "www", "http", "https", "dot com",
+    "click here", "read more", "subscribe", "follow us", "share", "tweet", "retweet", 
+    "facebook", "twitter", "x.com", "instagram", "youtube", "telegram", "whatsapp", 
+    "podcast", "newsletter", "advertisement", "sponsored", "editorial", "opinion",
+    "view original", "full story", "full report"
+]
 
 
-def severe(data):
+# --- 3. Processing Functions ---
 
+def severe(text_input: str) -> str:
+    """Classifies severity level of text using BERT."""
     tok = severity_tokenizer(
-        data,
+        text_input,
         padding=True,
         truncation=True,
         max_length=128,
         return_tensors="pt",
-    )
-
-    tok["input_ids"] = tok["input_ids"].to(severity_device)
-    tok["attention_mask"] = tok["attention_mask"].to(severity_device)
+    ).to(device)
 
     with torch.no_grad():
-
         output = severity_model(**tok)
-
         logits = output.logits
+        probabilities = F.softmax(logits, dim=1)[0] * 100
 
-        probabilities = F.softmax(
-            logits,
-            dim=1
-        )[0] * 100
-
-    predicted_class = torch.argmax(
-        probabilities
-    ).item() + 1
+    predicted_class = torch.argmax(probabilities).item() + 1
 
     severity_map = {
-        1: "IMPORTANT",
-        2: "CRITICAL",
+        1: "MEDIUM",
+        2: "HIGH",
         3: "LOW"
     }
-
-    return severity_map[predicted_class]
-
-
-# ============================================================
-# KEYBART MODEL
-# ============================================================
-
-keybart_model_name = "bloomberg/KeyBART"
-
-print("Loading KeyBART model...")
-
-keybart_tokenizer = BartTokenizer.from_pretrained(
-    keybart_model_name
-)
-
-keybart_model = BartForConditionalGeneration.from_pretrained(
-    keybart_model_name
-)
-
-keybart_model.to(torch.device("cpu"))
-keybart_model.eval()
-
-print("KeyBART model loaded")
+    return severity_map.get(predicted_class, "UNKNOWN")
 
 
-def short(text):
+def clean_sentence(text: str, remove_words: list) -> str:
+    """Removes media boilerplate terms and extra formatting."""
+    sorted_words = sorted(remove_words, key=len, reverse=True)
+    patterns = [re.escape(word) for word in sorted_words]
+    
+    regex_pattern = re.compile(r'\b(' + '|'.join(patterns) + r')\b', flags=re.IGNORECASE)
+    cleaned_text = regex_pattern.sub("", text)
+    
+    cleaned_text = re.sub(r'\s+', ' ', cleaned_text)
+    cleaned_text = re.sub(r'^\s*[\:\-\|\,\.\?]+\s*', '', cleaned_text)
+    cleaned_text = re.sub(r'\s*[\:\-\|\,\.\?]+\s*$', '', cleaned_text)
+    cleaned_text = re.sub(r'\s+([\:\-\|\,])', r'\1', cleaned_text)
+    
+    return cleaned_text.strip()
 
-    inputs = keybart_tokenizer(
-        text,
-        return_tensors="pt",
-        max_length=512,
-        truncation=True
+
+def short(cleaned_text) :
+    
+    inputs = keybart_tokenizer(cleaned_text, return_tensors="pt", max_length=512, truncation=True)
+
+    summary_ids = keybart_model.generate(
+        inputs["input_ids"], 
+        max_length=15,
+        min_length=2,
+        num_beams=4, 
+        length_penalty=0.6,
+        early_stopping=True
     )
 
-    with torch.no_grad():
-
-        summary_ids = keybart_model.generate(
-            inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            max_length=10,
-            min_length=2,
-            num_beams=4,
-            early_stopping=True,
-            no_repeat_ngram_size=2
-        )
-
-    raw_output = keybart_tokenizer.decode(
-        summary_ids[0],
-        skip_special_tokens=True
-    ).strip()
-
-    # Take only the first phrase
-    first_phrase = raw_output.split(";")[0].strip()
-
-    # Add semicolon at the end
-    return first_phrase 
+    raw_output = keybart_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+    single_keyphrase = re.split(r'[;,]', raw_output)[0].strip()
+    return single_keyphrase
 
 
-# ============================================================
-# SCRAPING FUNCTION
-# ============================================================
+def scrape(page, url: str) -> str:
+    """Scrapes headline given an active Playwright page instance."""
+    page.goto(url, wait_until="domcontentloaded")
+    headline = None
 
-def scrape(url):
+    if "ndtv.com" in url:
+        try:
+                 page.wait_for_selector("h1, h3", timeout=15000)
+        except Exception:
+            pass
 
-    with sync_playwright() as p:
+        content =    page.content()
+        soup = BeautifulSoup(content, "html.parser")
+        headlines = [
+            tag.get_text(separator=" ", strip=True) 
+            for tag in soup.find_all(["h1", "h3"]) 
+            if len(tag.get_text(strip=True)) > 15
+        ]
+        headline = headlines[0] if headlines else "NDTV headline not found"
 
-        browser = p.firefox.launch(
-            headless=True
-        )
+    elif "thehindu.com" in url:
+        try:
+                 page.wait_for_selector("h1", timeout=15000)
+        except Exception:
+            pass
 
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) "
-                "Gecko/20100101 Firefox/125.0"
-            ),
-            viewport={
-                "width": 1920,
-                "height": 1080
-            },
-        )
+        content =    page.content()
+        soup = BeautifulSoup(content, "html.parser")
+        head = soup.find("h1", class_="title") or soup.find("h1")
+        headline = head.get_text(separator=" ", strip=True) if head else "The Hindu headline not found"
 
-        page = context.new_page()
+    elif "https://indianexpress.com/" in url :
+        try : 
+             page.wait_for_selector("h1",timeout=15000)
+        except Exception :
+             pass
+        content = page.content()
+        soup = BeautifulSoup(content, "html.parser")
+        head = soup.find("h1", class_="topblockNews__featuredTitle")
+        headline = head.get_text(separator=" ", strip=True)
+        
 
-        page.goto(
-            url,
-            wait_until="domcontentloaded",
-            timeout=60000
-        )
+    else:
+        try:
+                 page.wait_for_selector(f"div.{toi_class.replace(' ', '.')}", timeout=15000)
+        except Exception:
+            pass
 
-        headline = None
+        content =    page.content()
+        soup = BeautifulSoup(content, "html.parser")
+        headline_div = soup.find("div", class_="Kt6Pm style_change T5Q6J")
+        headline = headline_div.get_text(separator=" ", strip=True) if headline_div else "TOI headline not found"
 
-        # ====================================================
-        # NDTV
-        # ====================================================
-
-        if url == "https://www.ndtv.com":
-
-            page.wait_for_selector(
-                "h1, h3",
-                timeout=15000
-            )
-
-            soup = BeautifulSoup(
-                page.content(),
-                "html.parser"
-            )
-
-            headlines = []
-
-            for tag in soup.find_all(
-                ["h1", "h3"]
-            ):
-
-                text = tag.get_text(
-                    separator=" ",
-                    strip=True
-                )
-
-                if text and len(text) > 15:
-                    headlines.append(text)
-
-            headline = (
-                headlines[0]
-                if headlines
-                else "NDTV headlines not found"
-            )
-
-        # ====================================================
-        # THE HINDU
-        # ====================================================
-
-        elif url == "https://www.thehindu.com/":
-
-            page.wait_for_selector(
-                "h1",
-                timeout=15000
-            )
-
-            soup = BeautifulSoup(
-                page.content(),
-                "html.parser"
-            )
-
-            head = soup.find(
-                "h1",
-                class_="title"
-            )
-
-            if head:
-
-                headline = head.get_text(
-                    separator=" ",
-                    strip=True
-                )
-
-            else:
-
-                head_any = soup.find("h1")
-
-                headline = (
-                    head_any.get_text(
-                        separator=" ",
-                        strip=True
-                    )
-                    if head_any
-                    else "The Hindu headline not found"
-                )
-
-        # ====================================================
-        # TIMES OF INDIA
-        # ====================================================
-
-        else:
-
-            page.wait_for_selector(
-                f"div.{toi_class.replace(' ', '.')}",
-                timeout=15000
-            )
-
-            soup = BeautifulSoup(
-                page.content(),
-                "html.parser"
-            )
-
-            headline_div = soup.find(
-                "div",
-                class_="Kt6Pm style_change T5Q6J"
-            )
-
-            if headline_div:
-
-                headline = headline_div.get_text(
-                    separator=" ",
-                    strip=True
-                )
-
-            else:
-
-                headline = "TOI headline not found"
-
-        browser.close()
-
-        return headline
+    return headline
 
 
-# ============================================================
-# URLS
-# ============================================================
+# --- 4. Pipeline Execution Function ---
 
-Urls = [
+
+
+urls = [
     "https://www.ndtv.com",
     "https://www.thehindu.com/",
     "https://timesofindia.indiatimes.com/",
+    "https://indianexpress.com/"
 ]
 
+    # Playwright Scraping
+with async_playwright() as p:
+    browser = p.firefox.launch(headless=True)
+    context =  browser.new_context(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        viewport={"width": 1920, "height": 1080},
+    )
+    page =   context.new_page()
 
-# ============================================================
-# SCRAPING
-# ============================================================
+    for url in urls:
+        result =     scrape(page, url)
+        headline_clean = result.replace("'", "''")
+        data.append(headline_clean)
+        browser.close()
 
-for i in Urls:
+    # Classification & Keyphrase extraction
+    for text in data:
+        severity.append(severe(text))
+        cleaned_text = clean_sentence(text, COPYRIGHT_BOILERPLATE_WORDS)
+        responses.append(short(cleaned_text))
 
-    try:
-
-        result = scrape(i)
-
-        if result:
-
-            headline_clean = result.replace(
-                "'",
-                "''"
-            )
-
-            data.append(headline_clean)
-
-            print(
-                f"Scraped: {headline_clean}"
-            )
-
-    except Exception as e:
-
-        print(
-            f"Error scraping {i}: {e}"
-        )
-
-
-print("scraping done")
-
-
-# ============================================================
-# SEVERITY
-# ============================================================
-
-for i in data:
-
-    try:
-
-        result = severe(i)
-
-        severity.append(result)
-
-        print(
-            f"Severity: {result}"
-        )
-
-    except Exception as e:
-
-        print(
-            f"Severity error: {e}"
-        )
-
-        severity.append("UNKNOWN")
-
-
-print("severity done")
-
-
-# ============================================================
-# KEYBART SHORT HEADLINES
-# ============================================================
-
-for i in data:
-
-    try:
-
-        result = short(i)
-
-        responses.append(result)
-
-        print(
-            f"Short: {result}"
-        )
-
-    except Exception as e:
-
-        print(
-            f"KeyBART error: {e}"
-        )
-
-        responses.append("")
-
-
-print("response done")
-
-
-# ============================================================
-# FINAL CHECK
-# ============================================================
-
-print()
-print("================================")
-print("FINAL RESULTS")
-print("================================")
-
-print("Headlines:", len(data))
-print("Severity:", len(severity))
-print("Short headlines:", len(responses))
-
-print("================================")
+    # Clear and update global lists in-place to preserve imports in other modules
+    
+print(data)
+print(severity)
+print(responses)
