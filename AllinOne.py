@@ -81,8 +81,8 @@ def severe(data):
     ).item() + 1
 
     severity_map = {
-        1: "MEDIUM",
-        2: "HIGH",
+        1: "IMPORTANT",
+        2: "CRITICAL",
         3: "LOW"
     }
 
