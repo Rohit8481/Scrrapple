@@ -1,5 +1,5 @@
 import mysql.connector
-from AllinOne import data, responses, severity
+from AllinOne import data, responses, severity, Urls
 from datetime import datetime 
 import os 
 
@@ -16,12 +16,12 @@ db = mysql.connector.connect(
 )
     
 cur = db.cursor()
-query = f"INSERT INTO news (id, short, headline, severity, time) VALUES (%s, %s, %s, %s, %s);"
+query = f"INSERT INTO news (id, short, headline, severity, time, source ) VALUES (%s, %s, %s, %s, %s, %s);"
 cur.execute("TRUNCATE TABLE news;")
 id = 101
 
-for  i, j, k in zip( responses, data, severity ):
-    cur.execute(query, ( id, i, j, k, time))
+for  i, j, k, u in zip( responses, data, severity, Urls):
+    cur.execute(query, ( id, i, j, k, time, u))
     id += 1 
 db.commit()
 print("database execution done")
