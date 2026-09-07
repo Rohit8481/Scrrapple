@@ -421,3 +421,6 @@ print("Severity:", len(severity))
 print("Short headlines:", len(responses))
 
 print("================================")
+
+
+
