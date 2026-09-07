@@ -157,14 +157,8 @@ def scrape(url):
         )
 
         context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) "
-                "Gecko/20100101 Firefox/125.0"
-            ),
-            viewport={
-                "width": 1920,
-                "height": 1080
-            },
+            user_agent="Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+            viewport={"width": 1920, "height": 1080},
         )
 
         page = context.new_page()
