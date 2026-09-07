@@ -158,7 +158,7 @@ def scrape(url):
 
         context = browser.new_context(
             user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) " 
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) "
                 "Gecko/20100101 Firefox/125.0"
             ),
             viewport={
@@ -223,7 +223,7 @@ def scrape(url):
                             page.content(),
                             "html.parser"
                         )
-            head =  soup.find("h1", class_="topblockNews__featuredTitle")
+            head =  soup.find("h1", class_="topblockNews__featuredTitle") or soup.find("h1")
             text = head.get_text(separator=" ", strip=True)
             
             if text and len(text) > 15:
@@ -270,7 +270,43 @@ def scrape(url):
                 )
             
 
-        
+        elif url == "https://www.hindustantimes.com/india-news" : 
+            
+            page.wait_for_selector(
+                            "h2",
+                            timeout=15000
+                        )
+            
+            soup = BeautifulSoup(
+                page.content(),
+                "html.parser"
+            )
+
+            head = soup.find(
+                "h2",
+                class_="hdg3"
+            )
+
+            if head:
+
+                headline = head.get_text(
+                    separator=" ",
+                    strip=True
+                )
+
+            else:
+
+                head_any = soup.find("h2")
+
+                headline = (
+                    head_any.get_text(
+                        separator=" ",
+                        strip=True
+                    )
+                    if head_any
+                    else "The HindustanTimes headline not found"
+                )
+
         # ====================================================
         # TIMES OF INDIA
         # ====================================================
@@ -316,7 +352,8 @@ Urls = [
     "https://www.ndtv.com",
     "https://www.thehindu.com/",
     "https://timesofindia.indiatimes.com/",
-    "https://indianexpress.com/"
+    "https://indianexpress.com/",
+    "https://www.hindustantimes.com/india-news"
 
 ]
 
@@ -353,6 +390,7 @@ for i in Urls:
 
 print("scraping done")
 print(data)
+
 # ============================================================
 # SEVERITY
 # ============================================================
