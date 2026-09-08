@@ -32,7 +32,7 @@ responses = []
 # SEVERITY MODEL
 # ============================================================
 
-model_path = "MODEL_PATH"
+model_path = os.getenv("MODEL_PATH")
 
 print("Loading severity model...")
 
