@@ -32,7 +32,7 @@ responses = []
 # SEVERITY MODEL
 # ============================================================
 
-model_path = "haggue23/severity_detector_directory"
+model_path = "haggue23/severity_detector_ai"
 
 print("Loading severity model...")
 
@@ -59,30 +59,20 @@ def severe(data):
         padding=True,
         truncation=True,
         max_length=128,
-        return_tensors="pt",
+        return_tensors="pt"
     )
 
-    tok["input_ids"] = tok["input_ids"].to(severity_device)
-    tok["attention_mask"] = tok["attention_mask"].to(severity_device)
+    tok = {k: v.to(severity_device) for k, v in tok.items()}
 
     with torch.no_grad():
-
         output = severity_model(**tok)
 
-        logits = output.logits
-
-        probabilities = F.softmax(
-            logits,
-            dim=1
-        )[0] * 100
-
-    predicted_class = torch.argmax(
-        probabilities
-    ).item() + 1
+    predicted_class = torch.argmax(output.logits, dim=1).item()
 
     severity_map = {
+        0: "CRITICAL",
         1: "IMPORTANT",
-        2: "CRITICAL",
+        2: "AVERAGE",
         3: "LOW"
     }
 
