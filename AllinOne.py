@@ -32,7 +32,7 @@ responses = []
 # SEVERITY MODEL
 # ============================================================
 
-model_path = "haggue23/severity_detector_ai"
+model_path = "MODEL_PATH"
 
 print("Loading severity model...")
 
