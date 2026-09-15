@@ -3,6 +3,8 @@ from AllinOne import data, responses, severity, Urls
 from datetime import datetime
 import os
 
+new_data = []
+
 db = mysql.connector.connect(
     host=os.getenv("TIDB_HOST"),
     user=os.getenv("TIDB_USER"),
@@ -18,18 +20,42 @@ cur.execute("""
     WHERE time < NOW() - INTERVAL 24 HOUR
 """)
 
-# 2. Current exact timestamp
+# 2. Get headlines already present in database
+cur.execute("SELECT headline FROM news")
+old_data = {row[0] for row in cur.fetchall()}
+
+# 3. Keep only new headlines
+for headline in data:
+    if headline not in old_data:
+        new_data.append(headline)
+
+# 4. Current exact timestamp
 time = datetime.now()
 
-# 3. Insert new news
+# 5. Insert only new news
 query = """
 INSERT INTO news
 (short, headline, severity, time, source)
 VALUES (%s, %s, %s, %s, %s)
 """
 
-for i, j, k, u in zip(responses, data, severity, Urls):
-    cur.execute(query, (i, j, k, time, u))
+# IMPORTANT:
+# responses, severity and Urls must correspond to data.
+# Therefore we need their indexes to select the matching values.
+
+for index, headline in enumerate(data):
+    if headline not in old_data:
+
+        cur.execute(
+            query,
+            (
+                responses[index],
+                headline,
+                severity[index],
+                time,
+                Urls[index]
+            )
+        )
 
 db.commit()
 
