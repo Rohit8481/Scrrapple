@@ -420,7 +420,7 @@ async def scrape(url):
 # WEBSITE URLS
 # ============================================================
 
-urls = [
+Urls = [
 
     "https://www.ndtv.com/",
     "https://www.thehindu.com/",
