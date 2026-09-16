@@ -53,7 +53,7 @@ for index, headline in enumerate(data):
                 headline,
                 severity[index],
                 time,
-                Urls[index]
+                Urls[index],
                 links[index]
             )
         )
