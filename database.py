@@ -1,5 +1,5 @@
 import mysql.connector
-from AllinOne import data, responses, severity, Urls
+from AllinOne import data, responses, severity, Urls, links
 from datetime import datetime
 import os
 
@@ -35,8 +35,8 @@ time = datetime.now()
 # 5. Insert only new news
 query = """
 INSERT INTO news
-(short, headline, severity, time, source)
-VALUES (%s, %s, %s, %s, %s)
+(short, headline, severity, time, source, links)
+VALUES (%s, %s, %s, %s, %s, %s)
 """
 
 # IMPORTANT:
@@ -54,6 +54,7 @@ for index, headline in enumerate(data):
                 severity[index],
                 time,
                 Urls[index]
+                links[index]
             )
         )
 
