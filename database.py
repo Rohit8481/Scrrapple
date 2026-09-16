@@ -35,7 +35,7 @@ time = datetime.now()
 # 5. Insert only new news
 query = """
 INSERT INTO news
-(short, headline, severity, time, source, links)
+(short, headline, severity, time, source, link)
 VALUES (%s, %s, %s, %s, %s, %s)
 """
 
