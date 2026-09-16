@@ -1,5 +1,5 @@
 import mysql.connector
-from AllinOne import data, responses, severity, Urls, links
+from AllinOne import data, responses, severity, urls, links
 from datetime import datetime
 import os
 
@@ -53,7 +53,7 @@ for index, headline in enumerate(data):
                 headline,
                 severity[index],
                 time,
-                Urls[index],
+                urls[index],
                 links[index]
             )
         )
