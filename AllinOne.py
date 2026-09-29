@@ -1,14 +1,22 @@
-import torch
+import asyncio
 import os
+from urllib.parse import urljoin
+
+import torch
 import torch.nn.functional as F
+
+from bs4 import BeautifulSoup
+
+from google import genai
+
+from playwright.async_api import async_playwright
+
 from transformers import (
     BertForSequenceClassification,
     BertTokenizer,
     BartForConditionalGeneration,
-    BartTokenizer
+    BartTokenizer,
 )
-from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
 
 
 # ============================================================
@@ -19,6 +27,15 @@ severity = []
 data = []
 responses = []
 links = []
+articles = []
+summary = []
+
+
+# ============================================================
+# DEVICE
+# ============================================================
+
+device = torch.device("cpu")
 
 
 # ============================================================
@@ -27,43 +44,22 @@ links = []
 
 model_path = os.getenv("MODEL_PATH")
 
-severity_tokenizer = BertTokenizer.from_pretrained(model_path)
-
-severity_model = BertForSequenceClassification.from_pretrained(model_path)
-
-device = torch.device("cpu")
-severity_model.to(device)
-severity_model.eval()
-
-
-def severe(data):
-
-    tok = severity_tokenizer(
-        data,
-        padding=True,
-        truncation=True,
-        max_length=128,
-        return_tensors="pt",
+if not model_path:
+    raise ValueError(
+        "MODEL_PATH environment variable is not set."
     )
 
-    tok = {k: v.to(device) for k, v in tok.items()}
 
-    with torch.no_grad():
+severity_tokenizer = BertTokenizer.from_pretrained(
+    model_path
+)
 
-        output = severity_model(**tok)
+severity_model = BertForSequenceClassification.from_pretrained(
+    model_path
+)
 
-        probs = F.softmax(output.logits, dim=1)
-
-        prediction = torch.argmax(probs, dim=1).item()
-
-    label_map = {
-        0: "CRITICAL",
-        1: "IMPORTANT",
-        2: "AVERAGE",
-        3: "LOW"
-    }
-
-    return label_map.get(prediction, "UNKNOWN")
+severity_model.to(device)
+severity_model.eval()
 
 
 # ============================================================
@@ -72,7 +68,9 @@ def severe(data):
 
 keybart_model_name = "bloomberg/KeyBART"
 
-keybart_tokenizer = BartTokenizer.from_pretrained(keybart_model_name)
+keybart_tokenizer = BartTokenizer.from_pretrained(
+    keybart_model_name
+)
 
 keybart_model = BartForConditionalGeneration.from_pretrained(
     keybart_model_name
@@ -82,13 +80,65 @@ keybart_model.to(device)
 keybart_model.eval()
 
 
+# ============================================================
+# SEVERITY FUNCTION
+# ============================================================
+
+def severe(data_text):
+
+    tok = severity_tokenizer(
+        data_text,
+        padding=True,
+        truncation=True,
+        max_length=128,
+        return_tensors="pt",
+    )
+
+    tok = {
+        k: v.to(device)
+        for k, v in tok.items()
+    }
+
+    with torch.no_grad():
+
+        output = severity_model(
+            **tok
+        )
+
+        probs = F.softmax(
+            output.logits,
+            dim=1
+        )
+
+        prediction = torch.argmax(
+            probs,
+            dim=1
+        ).item()
+
+    label_map = {
+        0: "CRITICAL",
+        1: "IMPORTANT",
+        2: "AVERAGE",
+        3: "LOW",
+    }
+
+    return label_map.get(
+        prediction,
+        "UNKNOWN"
+    )
+
+
+# ============================================================
+# KEYBART SHORT HEADLINE
+# ============================================================
+
 def short(text):
 
     inputs = keybart_tokenizer(
         text,
         return_tensors="pt",
         truncation=True,
-        max_length=512
+        max_length=512,
     )
 
     inputs = {
@@ -104,12 +154,12 @@ def short(text):
             min_length=2,
             num_beams=4,
             early_stopping=True,
-            no_repeat_ngram_size=2
+            no_repeat_ngram_size=2,
         )
 
     result = keybart_tokenizer.decode(
         output[0],
-        skip_special_tokens=True
+        skip_special_tokens=True,
     )
 
     # Only take text before ;
@@ -119,301 +169,441 @@ def short(text):
 
 
 # ============================================================
-# SCRAPER
+# GEMINI SUMMARY
 # ============================================================
 
-async def scrape(url):
+def gemini_summarize(article_text):
 
-    async with async_playwright() as p:
+    api_key = os.getenv("GEMINI_API_KEY")
 
-        browser = await p.firefox.launch(
-            headless=True
+    if not api_key:
+        raise ValueError(
+            "GEMINI_API_KEY environment variable is not set."
         )
 
-        page = await browser.new_page(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-            viewport={
-                "width": 1280,
-                "height": 720
-            }
+    client = genai.Client(
+        api_key=api_key
+    )
+
+    response = client.models.generate_content(
+
+        model="gemini-3.5-flash",
+
+        contents=f"""
+Rewrite the given news article in simple, clear,
+and easy-to-understand English.
+
+Follow these rules strictly:
+
+Main Point
+- Give the main point of the news in around 10 words.
+- Keep the meaning exactly the same.
+- Do not use complex or difficult words.
+- Do not add any information.
+- Do not change the meaning.
+
+4 Key Points
+- Give exactly 4 key points from the article.
+- Each point should be around 4–5 words only.
+- Use simple and common words.
+- Do not add information that is not in the article.
+
+Output format:
+
+Main Point:
+[Simple rewritten main point]
+
+Key Points:
+- [4–5 words]
+- [4–5 words]
+- [4–5 words]
+- [4–5 words]
+
+Article content:
+
+{article_text}
+""",
+    )
+
+    return response.text.strip()
+
+
+# ============================================================
+# ARTICLE CONTENT SCRAPER
+# ============================================================
+
+async def scrape_article_content(page, link):
+
+    """
+    Fetch the article page and extract paragraph text.
+    """
+
+    try:
+
+        print(
+            f"      Fetching article: {link}"
         )
 
-        try:
+        await page.goto(
+            link,
+            wait_until="domcontentloaded",
+            timeout=20000,
+        )
 
-            await page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=60000
+        await page.wait_for_selector(
+            "p",
+            timeout=10000,
+        )
+
+        art_soup = BeautifulSoup(
+            await page.content(),
+            "html.parser",
+        )
+
+        paragraphs = art_soup.find_all(
+            "p"
+        )
+
+        article_text = "\n".join(
+            p.get_text(
+                " ",
+                strip=True,
+            )
+            for p in paragraphs
+            if p.get_text(
+                strip=True
+            )
+        )
+
+        return article_text
+
+    except Exception as e:
+
+        print(
+            f"      Error fetching article body "
+            f"from {link}: {e}"
+        )
+
+        return ""
+
+
+# ============================================================
+# SITE SCRAPER
+# ============================================================
+
+async def scrape_site(browser, url):
+
+    page = await browser.new_page(
+
+        user_agent=(
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "Chrome/120 Safari/537.36"
+        ),
+
+        viewport={
+            "width": 1280,
+            "height": 720,
+        },
+    )
+
+    headline = None
+    news_link = None
+    article = None
+
+    try:
+
+        print("\n================================")
+        print(f"Scraping: {url}")
+        print("================================")
+
+        await page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=60000,
+        )
+
+
+        # ====================================================
+        # NDTV
+        # ====================================================
+
+        if "ndtv.com" in url:
+
+            await page.wait_for_selector(
+                "h1, h3",
+                timeout=15000,
             )
 
-            # ==================================================
-            # NDTV
-            # ==================================================
+            soup = BeautifulSoup(
+                await page.content(),
+                "html.parser",
+            )
 
-            if "ndtv.com" in url:
+            for element in soup.find_all(
+                ["h1", "h3"]
+            ):
 
-                await page.wait_for_selector(
-                    "h1, h3",
-                    timeout=15000
+                text = element.get_text(
+                    " ",
+                    strip=True,
                 )
 
-                html = await page.content()
+                if len(text) > 15:
 
-                soup = BeautifulSoup(
-                    html,
-                    "html.parser"
-                )
+                    headline = text
 
-                headline = None
-                news_link = None
-
-                elements = soup.find_all(
-                    ["h1", "h3"]
-                )
-
-                for element in elements:
-
-                    text = element.get_text(
-                        " ",
-                        strip=True
+                    parent_a = (
+                        element.find_parent("a")
+                        or element.find("a")
                     )
 
-                    if len(text) > 15:
+                    if (
+                        parent_a
+                        and parent_a.get("href")
+                    ):
+                        news_link = parent_a.get(
+                            "href"
+                        )
 
-                        headline = text
-
-                        # Check if headline itself is inside <a>
-                        parent_a = element.find_parent("a")
-
-                        if parent_a and parent_a.get("href"):
-                            news_link = parent_a.get("href")
-
-                        # Check for <a> inside headline
-                        if not news_link:
-
-                            a_tag = element.find("a")
-
-                            if a_tag and a_tag.get("href"):
-                                news_link = a_tag.get("href")
-
-                        break
+                    break
 
 
-            # ==================================================
-            # INDIAN EXPRESS
-            # ==================================================
+        # ====================================================
+        # INDIAN EXPRESS
+        # ====================================================
 
-            elif "indianexpress.com" in url:
+        elif "indianexpress.com" in url:
 
-                await page.wait_for_selector(
-                    "h1",
-                    timeout=15000
+            await page.wait_for_selector(
+                "h1",
+                timeout=15000,
+            )
+
+            soup = BeautifulSoup(
+                await page.content(),
+                "html.parser",
+            )
+
+            element = soup.select_one(
+                "h1.topblockNews__featuredTitle"
+            )
+
+            if not element:
+                element = soup.find("h1")
+
+            if element:
+
+                headline = element.get_text(
+                    " ",
+                    strip=True,
                 )
 
-                html = await page.content()
-
-                soup = BeautifulSoup(
-                    html,
-                    "html.parser"
+                parent_a = (
+                    element.find_parent("a")
+                    or element.find("a")
                 )
 
-                element = soup.select_one(
-                    "h1.topblockNews__featuredTitle"
-                )
-
-                if not element:
-                    element = soup.find("h1")
-
-                headline = None
-                news_link = None
-
-                if element:
-
-                    headline = element.get_text(
-                        " ",
-                        strip=True
+                if (
+                    parent_a
+                    and parent_a.get("href")
+                ):
+                    news_link = parent_a.get(
+                        "href"
                     )
 
-                    parent_a = element.find_parent("a")
 
-                    if parent_a and parent_a.get("href"):
-                        news_link = parent_a.get("href")
+        # ====================================================
+        # THE HINDU
+        # ====================================================
 
-                    if not news_link:
+        elif "thehindu.com" in url:
 
-                        a_tag = element.find("a")
+            await page.wait_for_selector(
+                "h1",
+                timeout=15000,
+            )
 
-                        if a_tag and a_tag.get("href"):
-                            news_link = a_tag.get("href")
+            soup = BeautifulSoup(
+                await page.content(),
+                "html.parser",
+            )
 
+            element = soup.select_one(
+                "h1.title"
+            )
 
-            # ==================================================
-            # THE HINDU
-            # ==================================================
+            if not element:
+                element = soup.find("h1")
 
-            elif "thehindu.com" in url:
+            if element:
 
-                await page.wait_for_selector(
-                    "h1",
-                    timeout=15000
+                headline = element.get_text(
+                    " ",
+                    strip=True,
                 )
 
-                html = await page.content()
-
-                soup = BeautifulSoup(
-                    html,
-                    "html.parser"
+                parent_a = (
+                    element.find_parent("a")
+                    or element.find("a")
                 )
 
-                element = soup.select_one(
-                    "h1.title"
-                )
-
-                if not element:
-                    element = soup.find("h1")
-
-                headline = None
-                news_link = None
-
-                if element:
-
-                    headline = element.get_text(
-                        " ",
-                        strip=True
+                if (
+                    parent_a
+                    and parent_a.get("href")
+                ):
+                    news_link = parent_a.get(
+                        "href"
                     )
 
-                    parent_a = element.find_parent("a")
 
-                    if parent_a and parent_a.get("href"):
-                        news_link = parent_a.get("href")
+        # ====================================================
+        # HINDUSTAN TIMES
+        # ====================================================
 
-                    if not news_link:
+        elif "hindustantimes.com" in url:
 
-                        a_tag = element.find("a")
+            await page.wait_for_selector(
+                "h2",
+                timeout=15000,
+            )
 
-                        if a_tag and a_tag.get("href"):
-                            news_link = a_tag.get("href")
+            soup = BeautifulSoup(
+                await page.content(),
+                "html.parser",
+            )
 
+            element = soup.select_one(
+                "h2.hdg3"
+            )
 
-            # ==================================================
-            # HINDUSTAN TIMES
-            # ==================================================
+            if not element:
+                element = soup.find("h2")
 
-            elif "hindustantimes.com" in url:
+            if element:
 
-                await page.wait_for_selector(
-                    "h2",
-                    timeout=15000
+                headline = element.get_text(
+                    " ",
+                    strip=True,
                 )
 
-                html = await page.content()
-
-                soup = BeautifulSoup(
-                    html,
-                    "html.parser"
+                parent_a = (
+                    element.find_parent("a")
+                    or element.find("a")
                 )
 
-                element = soup.select_one(
-                    "h2.hdg3"
-                )
-
-                if not element:
-                    element = soup.find("h2")
-
-                headline = None
-                news_link = None
-
-                if element:
-
-                    headline = element.get_text(
-                        " ",
-                        strip=True
+                if (
+                    parent_a
+                    and parent_a.get("href")
+                ):
+                    news_link = parent_a.get(
+                        "href"
                     )
 
-                    parent_a = element.find_parent("a")
 
-                    if parent_a and parent_a.get("href"):
-                        news_link = parent_a.get("href")
+        # ====================================================
+        # TIMES OF INDIA
+        # ====================================================
 
-                    if not news_link:
+        else:
 
-                        a_tag = element.find("a")
+            await page.wait_for_selector(
+                "div.Kt6Pm.style_change.T5Q6J",
+                timeout=15000,
+            )
 
-                        if a_tag and a_tag.get("href"):
-                            news_link = a_tag.get("href")
+            soup = BeautifulSoup(
+                await page.content(),
+                "html.parser",
+            )
 
+            element = soup.select_one(
+                "div.Kt6Pm.style_change.T5Q6J"
+            )
 
-            # ==================================================
-            # TIMES OF INDIA
-            # ==================================================
+            if element:
 
-            else:
-
-                await page.wait_for_selector(
-                    "div.Kt6Pm.style_change.T5Q6J",
-                    timeout=15000
+                headline = element.get_text(
+                    " ",
+                    strip=True,
                 )
 
-                html = await page.content()
-
-                soup = BeautifulSoup(
-                    html,
-                    "html.parser"
+                parent_a = (
+                    element.find_parent("a")
+                    or element.find("a")
                 )
 
-                element = soup.select_one(
-                    "div.Kt6Pm.style_change.T5Q6J"
-                )
-
-                headline = None
-                news_link = None
-
-                if element:
-
-                    headline = element.get_text(
-                        " ",
-                        strip=True
+                if (
+                    parent_a
+                    and parent_a.get("href")
+                ):
+                    news_link = parent_a.get(
+                        "href"
                     )
 
-                    parent_a = element.find_parent("a")
 
-                    if parent_a and parent_a.get("href"):
-                        news_link = parent_a.get("href")
+        # ====================================================
+        # MAKE LINK ABSOLUTE
+        # ====================================================
 
-                    if not news_link:
+        if news_link:
 
-                        a_tag = element.find("a")
+            if news_link.startswith("//"):
 
-                        if a_tag and a_tag.get("href"):
-                            news_link = a_tag.get("href")
+                news_link = (
+                    "https:" + news_link
+                )
+
+            elif news_link.startswith("/"):
+
+                news_link = urljoin(
+                    url,
+                    news_link
+                )
 
 
-            # ==================================================
-            # MAKE LINK ABSOLUTE
-            # ==================================================
+        # ====================================================
+        # FETCH ARTICLE
+        # ====================================================
 
-            if news_link:
+        if news_link:
 
-                if news_link.startswith("//"):
-                    news_link = "https:" + news_link
+            article = await scrape_article_content(
+                page,
+                news_link
+            )
 
-                elif news_link.startswith("/"):
-                    from urllib.parse import urljoin
-                    news_link = urljoin(url, news_link)
-
-            return headline, news_link
-
-        except Exception as e:
+        else:
 
             print(
-                f"Error scraping {url}: {e}"
+                "      No article link found."
             )
 
-            return None, None
 
-        finally:
+        return (
+            headline,
+            news_link,
+            article,
+        )
 
-            await browser.close()
+
+    except Exception as e:
+
+        print(
+            f"Error scraping {url}: {e}"
+        )
+
+        return (
+            None,
+            None,
+            None,
+        )
+
+
+    finally:
+
+        await page.close()
 
 
 # ============================================================
@@ -423,158 +613,347 @@ async def scrape(url):
 urls = [
 
     "https://www.ndtv.com/",
-    "https://www.thehindu.com/",
-    "https://timesofindia.indiatimes.com/",
-    "https://www.hindustantimes.com/",
-    "https://indianexpress.com/"
 
+    "https://www.thehindu.com/",
+
+    "https://timesofindia.indiatimes.com/",
+
+    "https://www.hindustantimes.com/",
+
+    "https://indianexpress.com/",
 ]
 
 
 # ============================================================
-# SCRAPE NEWS
+# MAIN
 # ============================================================
 
-import asyncio
+async def main():
 
-for i in urls:
+    global severity
+    global data
+    global responses
+    global links
+    global articles
+    global summary
 
-    result = asyncio.run(
-        scrape(i)
-    )
 
-    if result:
+    # ========================================================
+    # RESET ARRAYS
+    # ========================================================
 
-        headline, news_link = result
+    severity = []
+    data = []
+    responses = []
+    links = []
+    articles = []
+    summary = []
 
-        if headline:
 
-            headline = headline.replace(
-                "'",
-                "''"
-            )
+    # ========================================================
+    # START PLAYWRIGHT
+    # ========================================================
 
-            data.append(
-                headline
-            )
+    async with async_playwright() as p:
 
-            links.append(
-                news_link
+        browser = await p.firefox.launch(
+            headless=True
+        )
+
+        try:
+
+            # =================================================
+            # SCRAPE ALL WEBSITES
+            # =================================================
+
+            for url in urls:
+
+                (
+                    headline,
+                    news_link,
+                    article,
+                ) = await scrape_site(
+                    browser,
+                    url,
+                )
+
+                if headline:
+
+                    # Keep your previous SQL escaping
+                    headline = headline.replace(
+                        "'",
+                        "''",
+                    )
+
+                    data.append(
+                        headline
+                    )
+
+                    links.append(
+                        news_link or "N/A"
+                    )
+
+                    articles.append(
+                        article or ""
+                    )
+
+                    print(
+                        "\nHeadline:",
+                        headline,
+                    )
+
+                    print(
+                        "Link:",
+                        news_link,
+                    )
+
+                    print(
+                        "Article length:",
+                        len(article or ""),
+                    )
+
+                    print(
+                        "--------------------------------"
+                    )
+
+        finally:
+
+            await browser.close()
+
+
+    # ========================================================
+    # SEVERITY
+    # ========================================================
+
+    print("\n==============================")
+    print("RUNNING SEVERITY MODEL")
+    print("==============================")
+
+    for i in data:
+
+        try:
+
+            result = severe(i)
+
+            severity.append(
+                result
             )
 
             print(
                 "Headline:",
-                headline
+                i
             )
 
             print(
-                "Link:",
-                news_link
+                "Severity:",
+                result
+            )
+
+        except Exception as e:
+
+            severity.append(
+                "UNKNOWN"
             )
 
             print(
-                "--------------------------------"
+                "Severity Error:",
+                e
             )
 
 
-# ============================================================
-# SEVERITY
-# ============================================================
+    # ========================================================
+    # SHORT HEADLINE / KEYBART
+    # ========================================================
 
-for i in data:
+    print("\n==============================")
+    print("RUNNING KEYBART")
+    print("==============================")
 
-    try:
+    for i in data:
 
-        result = severe(i)
+        try:
 
-        severity.append(
-            result
+            result = short(i)
+
+            responses.append(
+                result
+            )
+
+            print(
+                "Original:",
+                i
+            )
+
+            print(
+                "Short:",
+                result
+            )
+
+        except Exception as e:
+
+            responses.append(
+                "UNKNOWN"
+            )
+
+            print(
+                "Short Headline Error:",
+                e
+            )
+
+
+    # ========================================================
+    # GEMINI SUMMARY
+    # ========================================================
+
+    print("\n==============================")
+    print("RUNNING GEMINI")
+    print("==============================")
+
+    for i in range(len(data)):
+
+        current_severity = severity[i]
+        article_text = articles[i]
+
+        if (
+            current_severity
+            in [
+                "CRITICAL",
+                "IMPORTANT",
+            ]
+            and article_text
+        ):
+
+            try:
+
+                result = gemini_summarize(
+                    article_text
+                )
+
+                summary.append(
+                    result
+                )
+
+                print(
+                    f"[{i + 1}] Gemini summary generated."
+                )
+
+            except Exception as e:
+
+                summary.append(
+                    f"Gemini Error: {e}"
+                )
+
+                print(
+                    f"[{i + 1}] Gemini Error:",
+                    e,
+                )
+
+        else:
+
+            result = (
+                f"Skipped "
+                f"(Severity: {current_severity})"
+            )
+
+            summary.append(
+                result
+            )
+
+            print(
+                f"[{i + 1}] Gemini skipped."
+            )
+
+
+    # ========================================================
+    # FINAL CHECK
+    # ========================================================
+
+    print("\n==============================")
+
+    print(
+        "Data:",
+        len(data)
+    )
+
+    print(
+        "Severity:",
+        len(severity)
+    )
+
+    print(
+        "Responses:",
+        len(responses)
+    )
+
+    print(
+        "Links:",
+        len(links)
+    )
+
+    print(
+        "Articles:",
+        len(articles)
+    )
+
+    print(
+        "Summary:",
+        len(summary)
+    )
+
+    print(
+        "==============================\n"
+    )
+
+
+    # ========================================================
+    # FINAL OUTPUT
+    # ========================================================
+
+    for i in range(len(data)):
+
+        print(
+            f"[{i + 1}]"
+        )
+
+        print(
+            "Headline:",
+            data[i]
         )
 
         print(
             "Severity:",
-            result
-        )
-
-    except Exception as e:
-
-        severity.append(
-            "UNKNOWN"
+            severity[i]
         )
 
         print(
-            "Severity Error:",
-            e
-        )
-
-
-# ============================================================
-# SHORT HEADLINE
-# ============================================================
-
-for i in data:
-
-    try:
-
-        result = short(i)
-
-        responses.append(
-            result
+            "Response:",
+            responses[i]
         )
 
         print(
-            "Short:",
-            result
-        )
-
-    except Exception as e:
-
-        responses.append(
-            "UNKNOWN"
+            "Link:",
+            links[i]
         )
 
         print(
-            "Short Headline Error:",
-            e
+            "Summary:"
+        )
+
+        print(
+            summary[i]
+        )
+
+        print(
+            "--------------------------------"
         )
 
 
 # ============================================================
-# FINAL CHECK
+# PROGRAM ENTRY POINT
 # ============================================================
 
-print("\n==============================")
+if __name__ == "__main__":
 
-print(
-    "Data:",
-    len(data)
-)
-
-print(
-    "Severity:",
-    len(severity)
-)
-
-print(
-    "Responses:",
-    len(responses)
-)
-
-print(
-    "Links:",
-    len(links)
-)
-
-print("==============================\n")
-
-print("DATA:")
-print(data)
-
-print("\nSEVERITY:")
-print(severity)
-
-print("\nRESPONSES:")
-print(responses)
-
-print("\nLINKS:")
-print(links)
+    asyncio.run(
+        main()
+    )
