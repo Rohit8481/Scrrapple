@@ -169,7 +169,7 @@ def short(text):
 
 
 # ============================================================
-# GEMINI SUMMARY
+# GEMINI SUMMARY WITH MODEL FALLBACK
 # ============================================================
 
 def gemini_summarize(article_text):
@@ -185,11 +185,16 @@ def gemini_summarize(article_text):
         api_key=api_key
     )
 
-    response = client.models.generate_content(
+    # Models will be tried in this exact order
+    models = [
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
+        "gemini-2.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash-lite",
+    ]
 
-        model="gemini-3.5-flash",
-
-        contents=f"""
+    prompt = f"""
 Rewrite the given news article in simple, clear,
 and easy-to-understand English.
 
@@ -222,12 +227,65 @@ Key Points:
 Article content:
 
 {article_text}
-""",
+"""
+
+    last_error = None
+
+    # ========================================================
+    # TRY EACH MODEL
+    # ========================================================
+
+    for model_name in models:
+
+        try:
+
+            print(
+                f"      Trying Gemini model: {model_name}"
+            )
+
+            response = client.models.generate_content(
+
+                model=model_name,
+
+                contents=prompt,
+            )
+
+            result = response.text.strip()
+
+            if result:
+
+                print(
+                    f"      Gemini success: {model_name}"
+                )
+
+                return result
+
+            else:
+
+                print(
+                    f"      Empty response from {model_name}"
+                )
+
+        except Exception as e:
+
+            last_error = e
+
+            print(
+                f"      Gemini error on {model_name}: {e}"
+            )
+
+            print(
+                f"      Trying next Gemini model..."
+            )
+
+    # ========================================================
+    # ALL MODELS FAILED
+    # ========================================================
+
+    raise RuntimeError(
+        "All Gemini models failed. "
+        f"Last error: {last_error}"
     )
-
-    return response.text.strip()
-
-
 # ============================================================
 # ARTICLE CONTENT SCRAPER
 # ============================================================
