@@ -199,6 +199,36 @@ Rewrite the given news article in simple, clear,
 and easy-to-understand English.
 
 Follow these rules strictly:
+Summarize the provided news article into exactly 5 points. Follow these strict guidelines:
+
+### Rules:
+1. Tone & Vocabulary: Use simple, clear, and easy-to-understand everyday language.
+2. Accuracy: Keep the meaning strictly accurate to the text. Do not invent, assume, or add outside details.
+3. Structure: Provide a single sentence per point. Do NOT include section titles or subheaders in the final output—only clean bullet points.
+
+---
+
+### Framework & Point Breakdown:
+
+Point 1: The Core Event & Primary Subject
+• What to cover: State the main headline event—what happened, who was involved, and where/when it occurred.
+• Purpose: Gives the reader instant context without needing any prior knowledge.
+
+Point 2: The Direct Cause or Key Trigger
+• What to cover: Explain why or how this happened—the underlying catalyst, incident, or motive.
+• Purpose: Provides essential backstory without clogging the summary with minor fluff.
+
+Point 3: Crucial Facts, Background, or Data
+• What to cover: Include key numbers, figures, key profiles, or hard evidence supporting the event.
+• Purpose: Adds objective facts and substance to reinforce Point 1.
+
+Point 4: Immediate Impact & Key Stakeholders
+• What to cover: Explain who or what was directly affected—aftermath, reactions, emergency actions, or immediate fallout.
+• Purpose: Highlights real-world outcomes and human consequences.
+
+Point 5: Future Outlook & Next Steps
+• What to cover: Explain what happens next—ongoing investigations, future steps, or upcoming developments.
+• Purpose: Leaves the reader with a complete picture of the situation going forward.
 
 Main Point
 - Give the main point of the news in around 10 words.
@@ -207,9 +237,9 @@ Main Point
 - Do not add any information.
 - Do not change the meaning.
 
-4 Key Points
-- Give exactly 4 key points from the article.
-- Each point should be around 4–5 words only.
+5 Key Points
+- Give exactly 5 key points from the article.
+- Each point should be around 6-7 words only.
 - Use simple and common words.
 - Do not add information that is not in the article.
 
@@ -219,6 +249,7 @@ Main Point:
 [Simple rewritten main point]
 
 Key Points:
+- [4–5 words]
 - [4–5 words]
 - [4–5 words]
 - [4–5 words]
