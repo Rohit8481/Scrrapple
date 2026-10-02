@@ -575,6 +575,7 @@ async def scrape_site(browser, url):
                     )
 
 
+        
         # ====================================================
         # HINDUSTAN TIMES
         # ====================================================
@@ -582,7 +583,7 @@ async def scrape_site(browser, url):
         elif "hindustantimes.com" in url:
 
             await page.wait_for_selector(
-                "h2",
+                "h2.hdg3",
                 timeout=15000,
             )
 
@@ -591,12 +592,10 @@ async def scrape_site(browser, url):
                 "html.parser",
             )
 
-            element = soup.select_one(
-                "h2.hdg3"
+            element = soup.find(
+                "h2",
+                class_="hdg3"
             )
-
-            if not element:
-                element = soup.find("h2")
 
             if element:
 
