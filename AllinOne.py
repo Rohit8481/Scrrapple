@@ -349,19 +349,48 @@ async def scrape_article_content(page, link):
             "html.parser",
         )
 
-        paragraphs = art_soup.find_all(
-            "p"
-        )
+        # ========================================================
+        # HINDUSTAN TIMES
+        # ========================================================
+
+        if "hindustantimes.com" in link:
+
+            paragraphs = [
+                p.get_text(
+                    " ",
+                    strip=True
+                )
+                for p in art_soup.find_all("p")
+                if p.get_text(
+                    " ",
+                    strip=True
+                )
+            ]
+
+        # ========================================================
+        # OTHER WEBSITES
+        # ========================================================
+
+        else:
+
+            paragraphs = art_soup.find_all(
+                "p"
+            )
+
+            paragraphs = [
+                p.get_text(
+                    " ",
+                    strip=True
+                )
+                for p in paragraphs
+                if p.get_text(
+                    " ",
+                    strip=True
+                )
+            ]
 
         article_text = "\n".join(
-            p.get_text(
-                " ",
-                strip=True,
-            )
-            for p in paragraphs
-            if p.get_text(
-                strip=True
-            )
+            paragraphs
         )
 
         return article_text
@@ -374,7 +403,6 @@ async def scrape_article_content(page, link):
         )
 
         return ""
-
 
 # ============================================================
 # SITE SCRAPER
