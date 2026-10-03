@@ -935,6 +935,7 @@ async def main():
             in [
                 "CRITICAL",
                 "IMPORTANT",
+                "AVERAGE",
             ]
             and article_text
         ):
