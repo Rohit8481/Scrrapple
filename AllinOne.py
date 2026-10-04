@@ -637,9 +637,9 @@ async def scrape_site(browser, url):
 
             if await element.count() > 0:
 
-            headline = (await element.inner_text()).strip()
+                headline = (await element.inner_text()).strip()
 
-            news_link = await element.get_attribute("href")
+                news_link = await element.get_attribute("href")
 
 
 
