@@ -635,14 +635,11 @@ async def scrape_site(browser, url):
 
             element = page.locator("div.article-title a").nth(3)
 
-            if element:
+            if await element.count() > 0:
 
-                headline = (await element.inner_text()).strip()
+            headline = (await element.inner_text()).strip()
 
-                if (
-                    element.get_attribute("href")
-                ):
-                    news_link = await element.get_attribute("href")
+            news_link = await element.get_attribute("href")
 
 
 
