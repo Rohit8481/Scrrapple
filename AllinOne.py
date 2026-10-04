@@ -618,28 +618,35 @@ async def scrape_site(browser, url):
                     )
 
         # ====================================================
-        # The Wire
+        # THE WIRE
         # ====================================================
-            
-        elif "thewire.in" in url:
 
+        elif "thewire.in" in url:
+        
             await page.wait_for_selector(
                 "div.article-title a",
                 timeout=15000,
             )
 
-            soup = BeautifulSoup(
-                await page.content(),
-                "html.parser",
-            )
-
-            element = page.locator("div.article-title a").nth(3)
+            element = page.locator(
+                "div.article-title a"
+            ).nth(3)
 
             if await element.count() > 0:
+            
+                headline = (
+                    await element.inner_text()
+                ).strip()
 
-                headline = (await element.inner_text()).strip()
+                href = await element.get_attribute(
+                    "href"
+                )
 
-                news_link = await element.get_attribute("href")
+                if href:
+                    news_link = urljoin(
+                        "https://thewire.in/",
+                        href
+                    )
 
 
 
@@ -687,21 +694,12 @@ async def scrape_site(browser, url):
         # ====================================================
         # MAKE LINK ABSOLUTE
         # ====================================================
-
+        
         if news_link:
-
-            if news_link.startswith("//"):
-
-                news_link = (
-                    "https:" + news_link
-                )
-
-            elif news_link.startswith("/"):
-
-                news_link = urljoin(
-                    url,
-                    news_link
-                )
+            news_link = urljoin(
+                url,
+                news_link
+            )
 
 
         # ====================================================
