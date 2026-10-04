@@ -617,6 +617,36 @@ async def scrape_site(browser, url):
                         "href"
                     )
 
+        # ====================================================
+        # The Wire
+        # ====================================================
+            
+        elif "thewire.in" in url:
+
+            await page.wait_for_selector(
+                "div.article-title a",
+                timeout=15000,
+            )
+
+            soup = BeautifulSoup(
+                await page.content(),
+                "html.parser",
+            )
+
+            element = page.locator("div.article-title a").nth(3)
+
+            if element:
+
+                headline = element.inner_text().strip()
+
+                if (
+                    element.get_attribute("href")
+                ):
+                    news_link = element.get(
+                        "href"
+                    )
+
+
 
         # ====================================================
         # TIMES OF INDIA
@@ -737,6 +767,8 @@ urls = [
     "https://www.hindustantimes.com/",
 
     "https://indianexpress.com/",
+
+    "https://www.thewire.in/",
 ]
 
 
