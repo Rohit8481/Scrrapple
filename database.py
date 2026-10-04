@@ -184,7 +184,9 @@ async def run_database():
 
             elif "indianexpress.com" in link:
                 source = "Indian Express"
-
+            
+            elif "thewire.in" in link:
+                source = "The Wire"
             else:
                 source = "Unknown"
 
