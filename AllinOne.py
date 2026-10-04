@@ -637,7 +637,7 @@ async def scrape_site(browser, url):
 
             if element:
 
-                headline = element.inner_text().strip()
+                headline = (await element.inner_text()).strip()
 
                 if (
                     element.get_attribute("href")
@@ -764,7 +764,7 @@ urls = [
 
     "https://timesofindia.indiatimes.com/",
 
-    "https://www.hindustantimes.com/",
+    "https://www.hindustantimes.com/india-news",
 
     "https://indianexpress.com/",
 
