@@ -642,9 +642,7 @@ async def scrape_site(browser, url):
                 if (
                     element.get_attribute("href")
                 ):
-                    news_link = element.get(
-                        "href"
-                    )
+                    news_link = await element.get_attribute("href")
 
 
 
