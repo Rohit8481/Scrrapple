@@ -248,7 +248,7 @@ Main Point
 Output format:
 
 Main Point:
-[Simple rewritten main point], [ location/region/area ]
+[Simple rewritten main point] :: [ location/region/area ]
 
 Key Points:
 - [4–5 words]
