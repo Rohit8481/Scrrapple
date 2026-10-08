@@ -236,6 +236,7 @@ Main Point
 - Do not use complex or difficult words.
 - Do not add any information.
 - Do not change the meaning.
+- Also grab location and area if available, if not location='center'
 
 5 Key Points
 - Give exactly 5 key points from the article.
@@ -243,10 +244,11 @@ Main Point
 - Use simple and common words.
 - Do not add information that is not in the article.
 
+
 Output format:
 
 Main Point:
-[Simple rewritten main point]
+[Simple rewritten main point], [ location/region/area ]
 
 Key Points:
 - [4–5 words]
